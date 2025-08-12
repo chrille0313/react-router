@@ -12,7 +12,7 @@ unstable: true
 
 <docs-warning>The middleware feature is currently experimental and subject to breaking changes. Use the `future.unstable_middleware` flag to enable it.</docs-warning>
 
-Middleware allows you to run code before and after the `Response` generation for the matched path. This enables common patterns like authentication, logging, error handling, and data preprocessing in a reusable way.
+Middleware allows you to run code before and after the `Response` generation for the matched path. This enables [common patterns][common-patterns] like authentication, logging, error handling, and data preprocessing in a reusable way.
 
 Middleware runs in a nested chain, executing from parent routes to child routes on the way "down" to your route handlers, then from child routes back to parent routes on the way "up" after a `Response` is generated.
 
@@ -350,6 +350,57 @@ const user = context.get(userContext); // Returns User type
 // context.user = user; // Could be anything
 ```
 
+#### Context and AsyncLocalStorage
+
+Node provides an [`AsyncLocalStorage`][asynclocalstorage] API which gives you a way to provide values through asynchronous execution contexts. While this is a Node API, most modern runtimes have have made it (mostly) available (i.e., [Cloudflare][cloudflare], [Bun][bun], [Deno][deno]).
+
+In theory, we could have leveraged `AsyncLocalStorage` directly as the way to pass values from middlewares to to child routes, but the lack of 100% cross-platform compatibility was concerning enough that we wanted to still ship a first-class `context` API so there would be way to publish reusable middleware packages guaranteed to work in a runtime-agnostic manner.
+
+That said, this API still works great with React Router middleware and can be used in place of, or alongside of the `context` API:
+
+<docs-info>`AsyncLocalStorage` is _especially_ powerful when using [React Server Components](../how-to/react-server-components) because it allows you to provide information from `middleware` to your Server Components and Server Actions because they run in the same server execution context 🤯</docs-info>
+
+```tsx filename=app/user-context.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const USER = new AsyncLocalStorage<User>();
+
+export async function provideUser(
+  request: Request,
+  cb: () => Promise<Response>,
+) {
+  let user = await getUser(request);
+  return USER.run(user, cb);
+}
+
+export function getUser() {
+  return USER.getStore();
+}
+```
+
+```tsx filename=app/root.tsx
+import { provideUser } from "./user-context";
+
+export const unstable_middleware: Route.unstable_MiddlewareFunction[] =
+  [
+    async ({ request, context }, next) => {
+      return provideUser(request, async () => {
+        let res = await next();
+        return res;
+      });
+    },
+  ];
+```
+
+```tsx filename=app/routes/_index.tsx
+import { getUser } from "../user-context";
+
+export function loader() {
+  let user = getUser();
+  //...
+}
+```
+
 ### The `next` Function
 
 The `next` function logic depends on which route middleware it's being called from:
@@ -390,7 +441,7 @@ const authMiddleware = async ({ request, context }) => {
 
 ### `next()` and Error Handling
 
-React Router contains built-in error handling via the route [`ErrorBoundary`](../start/framework/route-module#errorboundary) export. Just like when a loader/action throws, if a middleware throws an error it will be caught and handled at the appropriate `ErrorBoundary` and the `Response` will be returned through the ancestor `next()` call. This means that the `next()` function should never throw and should always return a `Response`, so you don't need to worry about wrapping it in a try/catch.
+React Router contains built-in error handling via the route [`ErrorBoundary`](../start/framework/route-module#errorboundary) export. Just like when a loader/action throws (_mostly_), if a middleware throws it will be caught and handled at the appropriate `ErrorBoundary` and a `Response` will be returned through the ancestor `next()` call. This means that the `next()` function should never throw and should always return a `Response`, so you don't need to worry about wrapping it in a try/catch.
 
 This behavior is important to allow middleware patterns such as automatically setting required headers on outgoing responses (i.e., committing a session) from a root middleware. If any error from a middleware caused `next()` to `throw`, we'd miss the execution of ancestor middlewares on the way out and those required headers wouldn't be set.
 
@@ -415,6 +466,8 @@ export const unstable_middleware = [
   }
 ]
 ```
+
+<docs-info>We say _"mostly"_ above because there is a small/nuanced difference if you throw a non-redirect `Response` in a `loader`/`action` versus throwing a `Response` in a `middleware` (redirects behave the same).<br/><br/>Throwing a non-redirect response from a middleware will use that response directly and return it up through the parent `next()` call. This differs from the behavior in `loaders`/`actions` where that response will be converted to an `ErrorResponse` to be rendered by the `ErrorBoundary`.<br/><br/>The difference here is because `loaders`/`actions` are expected to return data which is then provided to components for rendering. But middleware is expected to return a response - so if you return or throw one, we will use it directly. If you want to throw an error with a status code to an error boundary from middleware, you should use the [`data`](../api/utils/data) utility.</docs-info>
 
 ## Changes to `getLoadContext`/`AppLoadContext`
 
@@ -634,5 +687,10 @@ export async function loader({
 }
 ```
 
+[common-patterns]: #common-patterns
 [server-client]: #server-vs-client-middleware
 [getloadcontext]: #changes-to-getloadcontextapploadcontext
+[asynclocalstorage]: https://nodejs.org/api/async_context.html#class-asynclocalstorage
+[cloudflare]: https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/
+[bun]: https://bun.sh/blog/bun-v0.7.0#asynclocalstorage-support
+[deno]: https://docs.deno.com/api/node/async_hooks/~/AsyncLocalStorage
