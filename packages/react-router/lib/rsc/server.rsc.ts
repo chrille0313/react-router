@@ -518,6 +518,7 @@ async function processServerAction(
       revalidationRequest: Request;
       actionResult?: Promise<unknown>;
       formState?: unknown;
+      revalidate: boolean;
     }
   | Response
   | undefined
@@ -559,9 +560,30 @@ async function processServerAction(
       // The error is propagated to the client through the result promise in the stream
       onError?.(error);
     }
+
+    // We check both the first and second args to cover both <form action> and useActionState.
+    let formData1 =
+      actionArgs &&
+      typeof actionArgs[0] === "object" &&
+      actionArgs[0] instanceof FormData
+        ? actionArgs[0]
+        : null;
+    let formData2 =
+      actionArgs &&
+      typeof actionArgs[1] === "object" &&
+      actionArgs[1] instanceof FormData
+        ? actionArgs[1]
+        : null;
+    let revalidate =
+      (formData1 && formData1.has("$NO_REVALIDATE")) ||
+      (formData2 && formData2.has("$NO_REVALIDATE"))
+        ? false
+        : true;
+
     return {
       actionResult,
       revalidationRequest: getRevalidationRequest(),
+      revalidate,
     };
   } else if (isFormRequest) {
     const formData = await request.clone().formData();
@@ -591,6 +613,7 @@ async function processServerAction(
       return {
         formState,
         revalidationRequest: getRevalidationRequest(),
+        revalidate: true,
       };
     }
   }
@@ -754,6 +777,20 @@ async function generateRenderResponse(
               generateResponse,
               temporaryReferences,
               undefined,
+            );
+          }
+
+          if (result && result.revalidate === false) {
+            return generateResponse(
+              {
+                headers: new Headers(),
+                statusCode: 200,
+                payload: {
+                  type: "action",
+                  actionResult: Promise.resolve(result.actionResult),
+                },
+              },
+              { temporaryReferences },
             );
           }
         }

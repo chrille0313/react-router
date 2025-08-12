@@ -479,6 +479,11 @@ implementations.forEach((implementation) => {
                       path: "hydrate-fallback-props",
                       lazy: () => import("./routes/hydrate-fallback-props/home"),
                     },
+                    {
+                      id: "no-revalidate-server-action",
+                      path: "no-revalidate-server-action",
+                      lazy: () => import("./routes/no-revalidate-server-action/home"),
+                    },
                   ],
                 },
               ] satisfies RSCRouteConfig;
@@ -1108,6 +1113,43 @@ implementations.forEach((implementation) => {
                 );
               }
             `,
+
+            "src/routes/no-revalidate-server-action/home.actions.ts": js`
+              "use server";
+
+              export async function noRevalidateAction() {
+                return "no revalidate";
+              }
+            `,
+            "src/routes/no-revalidate-server-action/home.tsx": js`
+              import ClientHomeRoute from "./home.client";
+
+              export default function HomeRoute() {
+                return <ClientHomeRoute identity={{}} />;
+              }
+            `,
+            "src/routes/no-revalidate-server-action/home.client.tsx": js`
+              "use client";
+
+              import { useActionState, useState } from "react";
+              import { noRevalidateAction } from "./home.actions";
+
+              export default function HomeRoute({ identity }) {
+                const [initialIdentity] = useState(identity);
+                const [state, action, pending] = useActionState(noRevalidateAction, null);
+                return (
+                  <div>
+                    <form action={action}>
+                      <input name="$NO_REVALIDATE" type="hidden" />
+                      <button type="submit" data-submit>No Revalidate</button>
+                    </form>
+                    {state && <div data-state>{state}</div>}
+                    {pending && <div data-pending>Pending</div>}
+                    {initialIdentity !== identity && <div data-revalidated>Revalidated</div>}
+                  </div>
+                );
+              }
+            `,
           },
         });
       });
@@ -1524,6 +1566,23 @@ implementations.forEach((implementation) => {
 
           // Ensure this is using RSC
           validateRSCHtml(await page.content());
+        });
+
+        test("Supports server actions that disable revalidation", async ({
+          page,
+        }) => {
+          await page.goto(
+            `http://localhost:${port}/no-revalidate-server-action`,
+            { waitUntil: "networkidle" },
+          );
+
+          await page.click("[data-submit]");
+          await page.waitForSelector("[data-state]");
+          await page.waitForSelector("[data-pending]", { state: "hidden" });
+          await page.waitForSelector("[data-revalidated]", { state: "hidden" });
+          expect(await page.locator("[data-state]").textContent()).toBe(
+            "no revalidate",
+          );
         });
       });
 
